@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "kind": "codex_task_snapshot",
+  "generated_at": "2026-09-08T08:05:00Z",
+  "device": { "id": "desktop" },
+  "privacy": {
+    "includes_titles": true,
+    "titles_redacted": false,
+    "includes_message_bodies": false,
+    "includes_tool_arguments_or_outputs": false,
+    "includes_working_directories": false,
+    "includes_absolute_source_paths": false
+  },
+  "tasks": [
+    {
+      "task_id": "codex:11111111-1111-4111-8111-111111111111",
+      "thread_id": "11111111-1111-4111-8111-111111111111",
+      "title": "【等我确认】客户仪表盘",
+      "status": "needs_attention",
+      "status_confidence": "medium",
+      "status_basis": ["title_attention_marker"],
+      "attention_score": 95,
+      "recommended_action": "review_required_input",
+      "created_at": "2026-09-01T03:00:00Z",
+      "updated_at": "2026-09-08T07:30:00Z",
+      "archived": false,
+      "pinned": false,
+      "source_kind": "user",
+      "device_ids": ["desktop"],
+      "locator": {
+        "type": "codex_thread",
+        "thread_id": "11111111-1111-4111-8111-111111111111"
+      }
+    },
+    {
+      "task_id": "codex:33333333-3333-4333-8333-333333333333",
+      "thread_id": "33333333-3333-4333-8333-333333333333",
+      "title": "【已完成】升级脚本",
+      "status": "completed",
+      "status_confidence": "medium",
+      "status_basis": ["title_completion_marker"],
+      "attention_score": 0,
+      "recommended_action": "none",
+      "created_at": "2026-09-02T03:00:00Z",
+      "updated_at": "2026-09-08T06:00:00Z",
+      "archived": false,
+      "pinned": false,
+      "source_kind": "user",
+      "device_ids": ["desktop"],
+      "locator": {
+        "type": "codex_thread",
+        "thread_id": "33333333-3333-4333-8333-333333333333"
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+CREATE TABLE `tasks` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`source_thread_id` text,
+	`source_kind` text NOT NULL,
+	`title` text NOT NULL,
+	`summary` text NOT NULL,
+	`next_action` text NOT NULL,
+	`status` text NOT NULL,
+	`priority` text NOT NULL,
+	`project` text NOT NULL,
+	`device` text NOT NULL,
+	`host_online` integer NOT NULL,
+	`unread` integer NOT NULL,
+	`score` integer NOT NULL,
+	`reason` text NOT NULL,
+	`due_at` text,
+	`snoozed_until` text,
+	`last_activity_at` text NOT NULL,
+	`created_at` text NOT NULL,
+	`completed_at` text,
+	`tags` text NOT NULL
+);

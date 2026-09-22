@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788827340532,
+      "tag": "0000_fuzzy_titanium_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788827792616,
+      "tag": "0001_curious_hammerhead",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788828510637,
+      "tag": "0002_exotic_stepford_cuckoos",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789138325230,
+      "tag": "0003_mighty_rhino",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789337298302,
+      "tag": "0004_previous_franklin_storm",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789405954866,
+      "tag": "0005_neat_thunderball",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789432653098,
+      "tag": "0006_watery_titanium_man",
+      "breakpoints": true
+    }
+  ]
+}

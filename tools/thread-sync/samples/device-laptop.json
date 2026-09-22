@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "kind": "codex_task_snapshot",
+  "generated_at": "2026-09-08T08:00:00Z",
+  "device": { "id": "laptop" },
+  "privacy": {
+    "includes_titles": true,
+    "titles_redacted": false,
+    "includes_message_bodies": false,
+    "includes_tool_arguments_or_outputs": false,
+    "includes_working_directories": false,
+    "includes_absolute_source_paths": false
+  },
+  "tasks": [
+    {
+      "task_id": "codex:11111111-1111-4111-8111-111111111111",
+      "thread_id": "11111111-1111-4111-8111-111111111111",
+      "title": "【进行中】客户仪表盘",
+      "status": "in_progress",
+      "status_confidence": "medium",
+      "status_basis": ["title_progress_marker"],
+      "attention_score": 80,
+      "recommended_action": "continue_thread",
+      "created_at": "2026-09-01T03:00:00Z",
+      "updated_at": "2026-09-07T09:00:00Z",
+      "archived": false,
+      "pinned": false,
+      "source_kind": "user",
+      "device_ids": ["laptop"],
+      "locator": {
+        "type": "codex_thread",
+        "thread_id": "11111111-1111-4111-8111-111111111111"
+      }
+    },
+    {
+      "task_id": "codex:22222222-2222-4222-8222-222222222222",
+      "thread_id": "22222222-2222-4222-8222-222222222222",
+      "title": "【待继续】整理研究笔记",
+      "status": "suggested_next",
+      "status_confidence": "medium",
+      "status_basis": ["title_continue_marker"],
+      "attention_score": 75,
+      "recommended_action": "continue_thread",
+      "created_at": "2026-08-20T03:00:00Z",
+      "updated_at": "2026-08-25T09:00:00Z",
+      "archived": false,
+      "pinned": false,
+      "source_kind": "user",
+      "device_ids": ["laptop"],
+      "locator": {
+        "type": "codex_thread",
+        "thread_id": "22222222-2222-4222-8222-222222222222"
+      }
+    }
+  ]
+}

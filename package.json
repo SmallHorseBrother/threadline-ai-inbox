@@ -1,0 +1,46 @@
+{
+  "name": "threadline-ai-inbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Turn scattered Codex and ChatGPT conversations into a decision-focused AI work inbox.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node scripts/prepare-agent-assets.mjs && vinext dev",
+    "build": "node scripts/prepare-agent-assets.mjs && vinext build",
+    "start": "vinext start",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "db:generate": "drizzle-kit generate",
+    "db:local": "wrangler d1 migrations apply threadline-ai-inbox --local",
+    "check": "npm run lint && npm run test"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "lucide-react": "^0.468.0",
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.57.3",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.34",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.3.6",
+    "react-server-dom-webpack": "19.3.0",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vinext": "1.0.0-beta.11",
+    "vite": "8.3.0",
+    "wrangler": "4.136.3"
+  },
+  "type": "module"
+}

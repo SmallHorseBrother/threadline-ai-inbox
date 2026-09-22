@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.example/codex-task-snapshot.schema.json",
+  "title": "Codex Task Snapshot",
+  "type": "object",
+  "required": ["schema_version", "kind", "generated_at", "device", "tasks"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "codex_task_snapshot" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "device": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "account": {
+      "type": "object",
+      "required": ["alias", "key"],
+      "properties": {
+        "alias": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "key": { "type": "string", "pattern": "^account-" }
+      }
+    },
+    "privacy": { "type": "object" },
+    "classification": { "type": "object" },
+    "source_report": { "type": "object" },
+    "stats": { "type": "object" },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "thread_id",
+        "title",
+        "status",
+        "status_confidence",
+        "status_basis",
+        "attention_score",
+        "updated_at",
+        "device_ids",
+        "locator"
+      ],
+      "properties": {
+        "task_id": { "type": "string", "pattern": "^codex:" },
+        "thread_id": { "type": "string", "minLength": 1 },
+        "account_alias": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "account_key": { "type": "string", "pattern": "^account-" },
+        "title": { "type": "string" },
+        "status": {
+          "enum": ["completed", "needs_attention", "in_progress", "suggested_next", "active", "archived"]
+        },
+        "status_confidence": { "enum": ["low", "medium", "high"] },
+        "status_basis": { "type": "array", "items": { "type": "string" } },
+        "attention_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "recommended_action": { "type": "string" },
+        "created_at": { "type": ["string", "null"], "format": "date-time" },
+        "updated_at": { "type": ["string", "null"], "format": "date-time" },
+        "archived": { "type": "boolean" },
+        "pinned": { "type": "boolean" },
+        "source_kind": { "type": "string" },
+        "device_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "locator": {
+          "type": "object",
+          "required": ["type", "thread_id"],
+          "properties": {
+            "type": { "const": "codex_thread" },
+            "thread_id": { "type": "string" }
+          }
+        },
+        "goal": {
+          "type": "object",
+          "properties": {
+            "status": { "type": "string" },
+            "token_budget": { "type": ["integer", "null"] },
+            "tokens_used": { "type": ["integer", "null"] },
+            "time_used_seconds": { "type": ["integer", "number", "null"] }
+          }
+        },
+        "analysis_context": {
+          "type": "object",
+          "required": ["version", "fingerprint", "turns"],
+          "properties": {
+            "version": { "const": 1 },
+            "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "redactions": { "type": "integer", "minimum": 0 },
+            "turns": {
+              "type": "array",
+              "maxItems": 4,
+              "items": {
+                "type": "object",
+                "required": ["role", "text"],
+                "properties": {
+                  "role": { "enum": ["user", "assistant"] },
+                  "text": { "type": "string", "maxLength": 1600 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
