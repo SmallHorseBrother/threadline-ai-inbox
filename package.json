@@ -1,6 +1,6 @@
 {
   "name": "threadline-ai-inbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Turn scattered Codex and ChatGPT conversations into a decision-focused AI work inbox.",
   "license": "Apache-2.0",
@@ -10,9 +10,11 @@
   "scripts": {
     "dev": "node scripts/prepare-agent-assets.mjs && vinext dev",
     "build": "node scripts/prepare-agent-assets.mjs && vinext build",
+    "deploy:dry": "npm run build && wrangler deploy --dry-run",
+    "deploy": "npm run build && wrangler deploy",
     "start": "vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .wrangler",
     "db:generate": "drizzle-kit generate",
     "db:local": "wrangler d1 migrations apply threadline-ai-inbox --local",
     "check": "npm run lint && npm run test"
