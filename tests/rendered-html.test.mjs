@@ -20,29 +20,37 @@ test("defines the complete Threadline task dashboard", async () => {
   assert.match(taskboard, /DeviceScopeBar/);
   assert.match(taskboard, /状态看板/);
   assert.match(taskboard, /任务控制台/);
+  assert.match(taskboard, /资料库/);
+  assert.match(taskboard, /低价值归档/);
+  assert.match(taskboard, /永不归档/);
   assert.match(taskboard, /同步与提醒/);
   assert.match(taskboard, /全部账号/);
   assert.match(taskboard, /两个 Pro 账号，统一排序/);
   assert.match(taskboard, /导入 ChatGPT 历史/);
   assert.match(taskboard, /ChatGPT 云对话/);
+  assert.match(taskboard, /codex:\/\/threads\//);
+  assert.ok(taskboard.includes("(?:c|share)"));
+  assert.doesNotMatch(taskboard, /codex:\/\/thread\//);
   assert.match(layout, /og\.png/);
   assert.doesNotMatch(page + taskboard + layout, /codex-preview/);
   assert.doesNotMatch(page + taskboard + layout, /Your site is taking shape/);
 });
 
 test("ships persistence, privacy-safe sync, and deployment metadata", async () => {
-  const [hosting, api, syncApi, deviceApi, chatgptApi, chatgptParser, summaryApi, siteAuth, taskStore, taskAnalysis, executiveSummary, scanner, taskboard, packageJson, css] = await Promise.all([
+  const [hosting, api, syncApi, deviceApi, chatgptApi, lifecycleApi, chatgptParser, summaryApi, siteAuth, taskStore, taskAnalysis, executiveSummary, tasksSource, scanner, taskboard, packageJson, css] = await Promise.all([
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../app/api/tasks/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/device-sync/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/devices/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/chatgpt-import/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/lifecycle-review/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/chatgpt-import.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/executive-summary/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server/site-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server/task-store.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server/task-analysis.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server/executive-summary.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/tasks.ts", import.meta.url), "utf8"),
     readFile(new URL("../tools/thread-sync/codex_task_sync.py", import.meta.url), "utf8"),
     readFile(new URL("../app/taskboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -76,9 +84,21 @@ test("ships persistence, privacy-safe sync, and deployment metadata", async () =
   assert.match(taskAnalysis, /THREADLINE_ANALYSIS_API_KEY/);
   assert.match(taskAnalysis, /conversation_excerpt/);
   assert.match(taskAnalysis, /MAX_NEW_ANALYSES_PER_SYNC = 24/);
+  assert.match(taskAnalysis, /attention-lifecycle-v3/);
+  assert.match(taskAnalysis, /slice\(0, 2\)/);
+  assert.match(taskAnalysis, /slice\(-6\)/);
+  assert.match(taskAnalysis, /时间久绝不是 archive 的理由/);
+  assert.match(lifecycleApi, /confidence >= 0\.93/);
+  assert.match(lifecycleApi, /永不归档/);
   assert.match(taskAnalysis, /Promise\.allSettled/);
   assert.match(executiveSummary, /领导驾驶舱的首席助理/);
   assert.match(executiveSummary, /executive_summary_cache/);
+  assert.match(executiveSummary, /ranking_score/);
+  assert.match(executiveSummary, /同一项目最多推荐 2 项/);
+  assert.match(tasksSource, /recencyAdjustment/);
+  assert.match(tasksSource, /selectPriorityTasks/);
+  assert.match(tasksSource, /projectCounts/);
+  assert.doesNotMatch(tasksSource, /staleBoost/);
   assert.match(scanner, /ANALYSIS_CONTEXT_ROTATING_LIMIT = 18/);
   assert.match(scanner, /AGENT_VERSION = "2\.2\.0"/);
   assert.doesNotMatch(taskAnalysis, /sk-[a-z0-9]{16}/i);

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { taskScore, type Task } from "@/lib/tasks";
+import { isAttentionTask, selectPriorityTasks, taskScore, type Task } from "@/lib/tasks";
 
 export type ExecutiveSummary = {
   summary: string;
@@ -46,14 +46,14 @@ async function digest(value: string) {
 }
 
 function fallbackSummary(tasks: Task[]): ExecutiveSummary {
-  const open = tasks.filter((task) => task.status !== "done");
+  const open = tasks.filter(isAttentionTask);
   const workingSet = [...open].sort((a, b) => taskScore(b) - taskScore(a)).slice(0, 40);
   const mine = workingSet.filter((task) => task.status === "mine").length;
   const running = workingSet.filter((task) => task.status === "running").length;
   const suggested = workingSet.filter((task) => task.status === "suggested").length;
-  const first = workingSet.find((task) => task.status === "mine" || task.status === "suggested");
+  const first = selectPriorityTasks(workingSet, 1)[0];
   return {
-    summary: `系统已收录 ${tasks.length} 个对话，并把当前视野压缩为 ${workingSet.length} 个工作窗口；其中 ${mine} 项等你拍板、${running} 项正在执行、${suggested} 项建议介入。${first ? `建议先处理“${safeText(first.title, 36)}”。` : "当前没有必须立即介入的事项。"}`,
+    summary: `系统已收录 ${tasks.length} 个对话，并把当前视野压缩为 ${workingSet.length} 个工作窗口；其中 ${mine} 项等你拍板、${running} 项正在执行、${suggested} 项建议介入，其余内容留在资料库、已完成或归档区。${first ? `建议先处理“${safeText(first.title, 36)}”。` : "当前没有必须立即介入的事项。"}`,
     actions: first ? [safeText(first.nextAction, 64) || "查看最高优先级任务并决定下一步"] : ["保持当前节奏并等待新的实质进展"],
     generatedAt: new Date().toISOString(),
     source: "rules",
@@ -62,7 +62,7 @@ function fallbackSummary(tasks: Task[]): ExecutiveSummary {
 
 export async function getExecutiveSummary(userId: string, tasks: Task[]): Promise<ExecutiveSummary> {
   const fallback = fallbackSummary(tasks);
-  const open = tasks.filter((task) => task.status !== "done");
+  const open = tasks.filter(isAttentionTask);
   const workingSet = [...open].sort((a, b) => taskScore(b) - taskScore(a)).slice(0, 40);
   const byStatus = workingSet.reduce<Record<string, number>>((counts, task) => {
     counts[task.status] = (counts[task.status] ?? 0) + 1;
@@ -86,6 +86,10 @@ export async function getExecutiveSummary(userId: string, tasks: Task[]): Promis
       project: safeText(task.project, 48),
       device: safeText(task.device, 48),
       updated_at: task.lastActivityAt,
+      due_at: task.dueAt,
+      unread: task.unread,
+      priority: task.priority,
+      ranking_score: taskScore(task),
     })),
   };
   const fingerprint = await digest(JSON.stringify(snapshot));
@@ -133,6 +137,8 @@ export async function getExecutiveSummary(userId: string, tasks: Task[]): Promis
               "请把几十个并行任务压缩成一段中文领导摘要，让用户只需做决策，不需要重新阅读全部任务。",
               "summary 控制在 100 到 180 个汉字：先说整体态势，再指出最重要的阻塞或机会，最后给出今天的取舍建议。",
               "actions 返回最多 3 个、以动词开头、可直接执行的决策动作；不要复述标题，不要虚构进展。",
+              "旧任务不等于重要；优先未读决策、近期实质进展、明确截止日期和人工高优先级事项。",
+              "同一项目最多推荐 2 项，避免一个项目占满全部决策位。",
               "只输出 JSON：{\"summary\":\"...\",\"actions\":[\"...\"]}。",
             ].join("\n"),
           },

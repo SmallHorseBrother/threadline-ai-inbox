@@ -5,6 +5,7 @@ import {
   Archive,
   ArrowRight,
   Bell,
+  BookOpen,
   BrainCircuit,
   Check,
   CheckCircle2,
@@ -29,6 +30,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  ShieldCheck,
   Sparkles,
   Table2,
   TimerReset,
@@ -42,6 +44,8 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import {
   createSeedTasks,
   getRelativeTime,
+  isAttentionTask,
+  selectPriorityTasks,
   statusMeta,
   taskScore,
   type Task,
@@ -51,7 +55,7 @@ import {
 import { parseChatGPTExport } from "@/lib/chatgpt-import";
 import { normalizeSnapshotTasks } from "@/lib/snapshot-task";
 
-type View = "today" | "board" | "console" | "completed" | "sync";
+type View = "today" | "board" | "console" | "library" | "completed" | "archive" | "sync";
 
 type DeviceSource = {
   id: string;
@@ -72,6 +76,14 @@ type ExecutiveSummary = {
   source: "deepseek" | "rules";
 };
 
+type LifecycleProgress = {
+  reviewed: number;
+  remaining: number;
+  archived: number;
+  referenced: number;
+  paused?: boolean;
+};
+
 type PairingConfig = {
   version: 1;
   site_url: string;
@@ -86,7 +98,7 @@ type PairingConfig = {
 
 type SourceScope = "all" | Task["sourceKind"];
 
-const statusOrder: TaskStatus[] = ["mine", "running", "suggested", "waiting", "inbox", "done"];
+const statusOrder: TaskStatus[] = ["mine", "running", "suggested", "waiting", "inbox", "reference", "archived", "done"];
 
 const statusIcons: Record<TaskStatus, typeof Inbox> = {
   inbox: Inbox,
@@ -94,6 +106,8 @@ const statusIcons: Record<TaskStatus, typeof Inbox> = {
   running: LoaderCircle,
   waiting: Pause,
   suggested: Sparkles,
+  reference: BookOpen,
+  archived: Archive,
   done: CheckCircle2,
 };
 
@@ -101,7 +115,9 @@ const navItems: { id: View; label: string; icon: typeof Inbox }[] = [
   { id: "today", label: "今天", icon: Sparkles },
   { id: "board", label: "状态看板", icon: Columns3 },
   { id: "console", label: "任务控制台", icon: Table2 },
+  { id: "library", label: "资料库", icon: BookOpen },
   { id: "completed", label: "已完成", icon: CheckCircle2 },
+  { id: "archive", label: "低价值归档", icon: Archive },
   { id: "sync", label: "同步与提醒", icon: Cloud },
 ];
 
@@ -118,6 +134,38 @@ const sourceLabels: Record<SourceScope, string> = {
   codex: "Codex",
   chatgpt: "ChatGPT",
   manual: "手工任务",
+};
+
+type ChatGPTTarget = {
+  url: string;
+  kind: "original" | "shared";
+};
+
+function getChatGPTTarget(sourceThreadId: string): ChatGPTTarget | null {
+  const raw = sourceThreadId.trim();
+  if (!raw) return null;
+
+  const embeddedUrl = raw.match(/https:\/\/(?:chatgpt\.com|chat\.openai\.com)\/(?:c|share)\/[^\s)\]]+/i)?.[0];
+  const candidate = embeddedUrl || raw;
+  try {
+    const parsed = new URL(candidate);
+    if (!["chatgpt.com", "chat.openai.com"].includes(parsed.hostname.toLowerCase())) return null;
+    const match = parsed.pathname.match(/^\/(c|share)\/([^/?#]+)/i);
+    if (!match) return null;
+    return {
+      url: `https://chatgpt.com/${match[1].toLowerCase()}/${encodeURIComponent(match[2])}`,
+      kind: match[1].toLowerCase() === "share" ? "shared" : "original",
+    };
+  } catch {
+    if (!/^[0-9a-z-]{12,}$/i.test(raw)) return null;
+    return { url: `https://chatgpt.com/c/${encodeURIComponent(raw)}`, kind: "original" };
+  }
+}
+
+const continueButtonLabel = (task: Task) => {
+  if (task.sourceKind === "chatgpt") return `用${taskAccount(task)}继续`;
+  if (task.sourceKind === "codex") return "打开 Codex 任务";
+  return "打开原任务";
 };
 
 const supportsSemanticSync = (version: string | null) => {
@@ -881,12 +929,14 @@ export function Taskboard() {
   const [showChatGPTImport, setShowChatGPTImport] = useState(false);
   const [devices, setDevices] = useState<DeviceSource[]>([]);
   const [executiveSummary, setExecutiveSummary] = useState<ExecutiveSummary | null>(null);
+  const [lifecycleProgress, setLifecycleProgress] = useState<LifecycleProgress | null>(null);
   const [deviceBusy, setDeviceBusy] = useState(false);
   const [chatGPTBusy, setChatGPTBusy] = useState(false);
   const [chatGPTProgress, setChatGPTProgress] = useState(0);
   const [toast, setToast] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lifecycleRunning = useRef(false);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -938,6 +988,42 @@ export function Taskboard() {
     };
   }, []);
 
+  useEffect(() => {
+    if (isLoading || syncState !== "synced") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const reviewNextBatch = async () => {
+      if (cancelled || lifecycleRunning.current) return;
+      lifecycleRunning.current = true;
+      try {
+        const response = await fetch("/api/lifecycle-review", { method: "POST" });
+        if (!response.ok) return;
+        const data = (await response.json()) as LifecycleProgress & { tasks: Task[] };
+        if (cancelled) return;
+        setTasks(data.tasks);
+        setLifecycleProgress((current) => ({
+          reviewed: (current?.reviewed ?? 0) + data.reviewed,
+          remaining: data.remaining,
+          archived: (current?.archived ?? 0) + data.archived,
+          referenced: (current?.referenced ?? 0) + data.referenced,
+          paused: data.paused,
+        }));
+        if (data.remaining > 0 && !data.paused) {
+          timer = setTimeout(reviewNextBatch, 10_000);
+        }
+      } catch {
+        // Device sync and manual controls continue to work if background sorting is temporarily unavailable.
+      } finally {
+        lifecycleRunning.current = false;
+      }
+    };
+    timer = setTimeout(reviewNextBatch, 3_000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [isLoading, syncState]);
+
   const projects = useMemo(
     () => ["全部项目", ...Array.from(new Set(tasks.map((task) => task.project)))],
     [tasks],
@@ -979,11 +1065,16 @@ export function Taskboard() {
     const normalized = query.trim().toLowerCase();
     return scopedTasks
       .filter((task) => {
-        const matchesView = view === "completed" ? task.status === "done" : true;
+        const matchesView =
+          view === "completed" ? task.status === "done"
+            : view === "library" ? task.status === "reference"
+              : view === "archive" ? task.status === "archived"
+                : view === "sync" ? true
+                  : isAttentionTask(task);
         const haystack = `${task.title} ${task.summary} ${task.nextAction} ${task.project} ${taskAccount(task)} ${task.device} ${task.tags.join(" ")}`.toLowerCase();
         return matchesView && (!normalized || haystack.includes(normalized));
       })
-      .sort((a, b) => taskScore(b) - taskScore(a));
+      .sort((a, b) => taskScore(b) - taskScore(a) || new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime());
   }, [scopedTasks, query, view]);
 
   const selectedTask = selectedId ? tasks.find((task) => task.id === selectedId) ?? null : null;
@@ -991,7 +1082,7 @@ export function Taskboard() {
     () =>
       statusOrder.reduce<Record<TaskStatus, number>>(
         (result, status) => ({ ...result, [status]: scopedTasks.filter((task) => task.status === status).length }),
-        { inbox: 0, mine: 0, running: 0, waiting: 0, suggested: 0, done: 0 },
+        { inbox: 0, mine: 0, running: 0, waiting: 0, suggested: 0, reference: 0, archived: 0, done: 0 },
       ),
     [scopedTasks],
   );
@@ -1065,13 +1156,22 @@ export function Taskboard() {
       return;
     }
     if (task.sourceKind === "chatgpt") {
-      window.open(`https://chatgpt.com/c/${encodeURIComponent(task.sourceThreadId)}`, "_blank", "noopener,noreferrer");
-      showToast("已在新标签页打开 ChatGPT 原对话");
+      const target = getChatGPTTarget(task.sourceThreadId);
+      if (!target) {
+        showToast("这条记录缺少可定位的 ChatGPT 原对话地址");
+        return;
+      }
+      window.open(target.url, "_blank", "noopener,noreferrer");
+      showToast(
+        target.kind === "shared"
+          ? "已打开共享快照；共享页只能查看，不能替代原账号对话"
+          : `已定位${taskAccount(task)}的原对话；请使用登录该账号的浏览器配置`,
+      );
       return;
     }
     navigator.clipboard?.writeText(task.sourceThreadId).catch(() => undefined);
-    showToast("已复制对话 ID，正在尝试回到原对话");
-    window.location.href = `codex://thread/${encodeURIComponent(task.sourceThreadId)}`;
+    showToast("正在打开对应的 Codex 任务；任务 ID 也已复制");
+    window.location.href = `codex://threads/${encodeURIComponent(task.sourceThreadId)}`;
   };
 
   const addTask = async (task: Task) => {
@@ -1272,7 +1372,11 @@ export function Taskboard() {
         <nav className="main-nav" aria-label="主导航">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const badge = item.id === "today" ? counts.mine : item.id === "completed" ? counts.done : 0;
+            const badge = item.id === "today" ? counts.mine
+              : item.id === "library" ? counts.reference
+                : item.id === "completed" ? counts.done
+                  : item.id === "archive" ? counts.archived
+                    : 0;
             return (
               <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setSidebarOpen(false); }}>
                 <Icon size={18} />
@@ -1289,7 +1393,7 @@ export function Taskboard() {
             <button key={source} className={`project-link source-link ${sourceScope === source ? "active" : ""}`} onClick={() => { setSourceScope(sourceScope === source ? "all" : source); setSidebarOpen(false); }}>
               <span className={`source-dot source-${source}`} />
               <span>{sourceLabels[source]}</span>
-              <small>{tasks.filter((task) => task.sourceKind === source && task.status !== "done").length}</small>
+              <small>{tasks.filter((task) => task.sourceKind === source && isAttentionTask(task)).length}</small>
             </button>
           ))}
         </div>
@@ -1300,7 +1404,7 @@ export function Taskboard() {
             <button key={name} className={`project-link account-link ${account === name ? "active" : ""}`} onClick={() => { setAccount(account === name ? "全部账号" : name); setSidebarOpen(false); }}>
               <span className="account-avatar">{name.replace("账号", "") || "·"}</span>
               <span>{name}</span>
-              <small>{tasks.filter((task) => taskAccount(task) === name && task.status !== "done").length}</small>
+              <small>{tasks.filter((task) => taskAccount(task) === name && isAttentionTask(task)).length}</small>
             </button>
           ))}
         </div>
@@ -1311,7 +1415,7 @@ export function Taskboard() {
             <button key={name} className={`project-link ${project === name ? "active" : ""}`} onClick={() => { setProject(project === name ? "全部项目" : name); setSidebarOpen(false); }}>
               <span className="project-dot" />
               <span>{name}</span>
-              <small>{tasks.filter((task) => task.project === name && task.status !== "done").length}</small>
+              <small>{tasks.filter((task) => task.project === name && isAttentionTask(task)).length}</small>
             </button>
           ))}
         </div>
@@ -1359,9 +1463,11 @@ export function Taskboard() {
           {view === "today" && (
             <TodayView
               tasks={visibleTasks}
+              allTasks={scopedTasks}
               deviceScope={effectiveDeviceScope}
               devices={devices}
               executiveSummary={executiveSummary}
+              lifecycleProgress={lifecycleProgress}
               onOpen={setSelectedId}
               onDone={markDone}
               onSnooze={snooze}
@@ -1373,10 +1479,16 @@ export function Taskboard() {
             <BoardView tasks={visibleTasks} dragId={dragId} setDragId={setDragId} onDrop={(status) => { const task = tasks.find((item) => item.id === dragId); if (task) persist(task.id, { status, completedAt: status === "done" ? new Date().toISOString() : null, reason: `手动移至${statusMeta[status].label}` }); setDragId(null); }} onOpen={setSelectedId} onDone={markDone} onSnooze={snooze} onContinue={continueTask} />
           )}
           {view === "console" && (
-            <ConsoleView tasks={visibleTasks.filter((task) => task.status !== "done")} onOpen={setSelectedId} onContinue={continueTask} />
+            <ConsoleView tasks={visibleTasks.filter(isAttentionTask)} onOpen={setSelectedId} onContinue={continueTask} />
+          )}
+          {view === "library" && (
+            <PassiveView kind="reference" tasks={visibleTasks} onOpen={setSelectedId} onRestore={(task) => persist(task.id, { status: "suggested", completedAt: null, reason: "从资料库重新激活", manualOverride: true }, "已恢复到建议继续")} />
           )}
           {view === "completed" && (
             <CompletedView tasks={visibleTasks} onOpen={setSelectedId} onRestore={(task) => persist(task.id, { status: "suggested", completedAt: null, reason: "重新打开" }, "任务已恢复到建议继续")} />
+          )}
+          {view === "archive" && (
+            <PassiveView kind="archived" tasks={visibleTasks} onOpen={setSelectedId} onRestore={(task) => persist(task.id, { status: "suggested", completedAt: null, reason: "从归档恢复", manualOverride: true }, "已恢复到建议继续")} />
           )}
           {view === "sync" && (
             <SyncView
@@ -1463,27 +1575,30 @@ function DeviceScopeBar({ tasks, devices, selected, onSelect }: {
   );
 }
 
-function TodayView({ tasks, deviceScope, devices, executiveSummary, onOpen, onDone, onSnooze, onContinue, onUpgrade }: {
+function TodayView({ tasks, allTasks, deviceScope, devices, executiveSummary, lifecycleProgress, onOpen, onDone, onSnooze, onContinue, onUpgrade }: {
   tasks: Task[];
+  allTasks: Task[];
   deviceScope: string;
   devices: DeviceSource[];
   executiveSummary: ExecutiveSummary | null;
+  lifecycleProgress: LifecycleProgress | null;
   onOpen: (id: string) => void;
   onDone: (task: Task) => void;
   onSnooze: (task: Task) => void;
   onContinue: (task: Task) => void;
   onUpgrade: () => void;
 }) {
-  const openTasks = tasks.filter((task) => task.status !== "done");
+  const openTasks = tasks.filter(isAttentionTask);
   const workingSet = openTasks.slice(0, 40);
   const backlogCount = Math.max(0, openTasks.length - workingSet.length);
+  const libraryCount = allTasks.filter((task) => task.status === "reference").length;
+  const archiveCount = allTasks.filter((task) => task.status === "archived").length;
   const decisions = workingSet.filter((task) =>
     task.status === "mine" || task.status === "suggested" || task.status === "inbox",
   );
   const mine = workingSet.filter((task) => task.status === "mine");
   const running = workingSet.filter((task) => task.status === "running");
-  const stale = workingSet.filter((task) => task.status === "suggested").slice(0, 4);
-  const suggestions = (decisions.length ? decisions : running).slice(0, 3);
+  const suggestions = selectPriorityTasks(decisions.length ? decisions : running, 3);
   const outdatedDevices = devices.filter(
     (device) => !device.revokedAt && !isChatGPTWebDevice(device) && !supportsSemanticSync(device.agentVersion),
   );
@@ -1493,7 +1608,7 @@ function TodayView({ tasks, deviceScope, devices, executiveSummary, onOpen, onDo
         <div>
           <span className="eyebrow">领导驾驶舱 · {deviceScope}</span>
           <h1>只看需要你拍板的事。</h1>
-          <p>已收录 {tasks.length} 项，当前只保留 {workingSet.length} 个工作窗口；{backlogCount} 项历史任务在后台逐批深扫。</p>
+          <p>已收录 {allTasks.length} 项，只保留 {workingSet.length} 个工作窗口；{libraryCount} 项沉淀为资料，{archiveCount} 项已从视野中收起。</p>
         </div>
         <div className="focus-score"><div><Sparkles size={18} /><strong>{suggestions.length}</strong></div><span>优先拍板</span></div>
       </section>
@@ -1501,22 +1616,23 @@ function TodayView({ tasks, deviceScope, devices, executiveSummary, onOpen, onDo
       <section className="executive-memo">
         <span className="memo-icon"><BrainCircuit size={20} /></span>
         <div>
-          <span>V4.1 Flash · 全局领导摘要</span>
+          <span>AI · 全局领导摘要</span>
           <p>{executiveSummary?.summary ?? "正在把全部对话压缩成一段可决策的总览……"}</p>
           {executiveSummary?.actions?.length ? <div className="memo-actions">{executiveSummary.actions.map((action, index) => <small key={`${action}-${index}`}>{index + 1}. {action}</small>)}</div> : null}
         </div>
       </section>
 
       <section className="briefing-strip" aria-label="自动汇报状态">
-        <div><span className="briefing-icon"><BrainCircuit size={18} /></span><p><strong>持续巡检中</strong><small>每 15 分钟优先扫变化任务，并轮换深扫历史</small></p></div>
+        <div><span className="briefing-icon"><BrainCircuit size={18} /></span><p><strong>{lifecycleProgress?.remaining ? `正在整理剩余 ${lifecycleProgress.remaining} 项` : "持续巡检中"}</strong><small>{lifecycleProgress?.reviewed ? `本次已整理 ${lifecycleProgress.reviewed} 项；旧而有用的内容会进入资料库` : "变化任务实时判断，历史记录分批整理"}</small></p></div>
         <div><span>等你拍板</span><strong>{mine.length}</strong></div>
         <div><span>AI 处理中</span><strong>{running.length}</strong></div>
-        <div><span>建议介入</span><strong>{stale.length}</strong></div>
+        <div><span>资料沉淀</span><strong>{libraryCount}</strong></div>
+        <div><span>后台积压</span><strong>{backlogCount}</strong></div>
       </section>
 
       {outdatedDevices.length > 0 && (
         <section className="upgrade-notice">
-          <div><BrainCircuit size={18} /><p><strong>{outdatedDevices.length} 台电脑尚未开启智能汇报</strong><span>升级一次采集器后，新增对话才会持续交给 V4.1 Flash 判断。</span></p></div>
+          <div><BrainCircuit size={18} /><p><strong>{outdatedDevices.length} 台电脑尚未开启智能汇报</strong><span>升级一次采集器后，新增对话才会持续交给你配置的模型判断。</span></p></div>
           <button className="secondary-button" onClick={onUpgrade}><Download size={16} />下载统一升级脚本</button>
         </section>
       )}
@@ -1530,7 +1646,7 @@ function TodayView({ tasks, deviceScope, devices, executiveSummary, onOpen, onDo
             <p className="next-action"><span>下一步</span>{task.nextAction}</p>
             <div className="card-meta"><AccountBadge account={taskAccount(task)} /><SourceBadge source={task.sourceKind} /><span>{task.project}</span><span>{task.device}</span><span>{getRelativeTime(task.lastActivityAt)}</span></div>
             <div className="card-actions" onClick={(event) => event.stopPropagation()}>
-              <button className="primary-button" onClick={() => onContinue(task)}>继续对话 <ArrowRight size={16} /></button>
+              <button className="primary-button" onClick={() => onContinue(task)}>{continueButtonLabel(task)} <ArrowRight size={16} /></button>
               <button className="secondary-button" onClick={() => onDone(task)}><Check size={16} />完成</button>
               <button className="icon-button" onClick={() => onSnooze(task)} aria-label="稍后提醒"><TimerReset size={17} /></button>
             </div>
@@ -1569,7 +1685,7 @@ function BoardView({ tasks, dragId, setDragId, onDrop, onOpen, onDone, onSnooze,
   const columns: TaskStatus[] = ["mine", "running", "suggested", "waiting"];
   return (
     <>
-      <section className="simple-heading"><div><span className="eyebrow">全局状态</span><h1>状态看板</h1><p>拖动卡片改变状态，点击卡片查看完整进展。</p></div><div className="view-hint"><Columns3 size={17} />{tasks.filter((task) => task.status !== "done").length} 项未完成</div></section>
+      <section className="simple-heading"><div><span className="eyebrow">活跃工作区</span><h1>状态看板</h1><p>这里只显示仍需推进的工作；资料、完成项和低价值历史已分开收纳。</p></div><div className="view-hint"><Columns3 size={17} />{tasks.filter(isAttentionTask).length} 个工作窗口</div></section>
       <div className="kanban">
         {columns.map((status) => {
           const Icon = statusIcons[status];
@@ -1595,7 +1711,7 @@ function BoardView({ tasks, dragId, setDragId, onDrop, onOpen, onDone, onSnooze,
 function ConsoleView({ tasks, onOpen, onContinue }: { tasks: Task[]; onOpen: (id: string) => void; onContinue: (task: Task) => void }) {
   return (
     <>
-      <section className="simple-heading"><div><span className="eyebrow">高密度模式</span><h1>任务控制台</h1><p>适合一次浏览几十到上百项任务。</p></div><div className="view-hint"><LayoutList size={17} />按推荐分排序</div></section>
+      <section className="simple-heading"><div><span className="eyebrow">高密度模式</span><h1>任务控制台</h1><p>集中查看活跃工作，不再混入资料库和低价值历史。</p></div><div className="view-hint"><LayoutList size={17} />按推荐分排序</div></section>
       <div className="table-panel">
         <table>
           <thead><tr><th>状态</th><th>账号</th><th>来源</th><th>任务</th><th>下一步</th><th>推荐</th><th>项目</th><th>设备</th><th>最近推进</th><th><span className="sr-only">操作</span></th></tr></thead>
@@ -1611,7 +1727,7 @@ function ConsoleView({ tasks, onOpen, onContinue }: { tasks: Task[]; onOpen: (id
                   <td className="next-cell">{task.nextAction}</td>
                   <td><span className={`score-pill score-${Math.floor(taskScore(task) / 20)}`}>{taskScore(task)}</span></td>
                   <td>{task.project}</td><td><span className="device-cell"><Monitor size={14} />{task.device}</span></td><td>{getRelativeTime(task.lastActivityAt)}</td>
-                  <td><button className="icon-button" onClick={(event) => { event.stopPropagation(); onContinue(task); }} aria-label={`继续${task.title}`}><ArrowRight size={16} /></button></td>
+                  <td><button className="icon-button" onClick={(event) => { event.stopPropagation(); onContinue(task); }} aria-label={`${continueButtonLabel(task)}：${task.title}`} title={continueButtonLabel(task)}><ArrowRight size={16} /></button></td>
                 </tr>
               );
             })}
@@ -1630,6 +1746,33 @@ function CompletedView({ tasks, onOpen, onRestore }: { tasks: Task[]; onOpen: (i
         {tasks.length ? tasks.map((task) => (
           <article key={task.id} onClick={() => onOpen(task.id)}><div className="completed-check"><Check size={18} /></div><div><h3>{task.title}</h3><p><AccountBadge account={taskAccount(task)} /><SourceBadge source={task.sourceKind} />{task.summary}</p></div><span>{task.completedAt ? getRelativeTime(task.completedAt) : "已完成"}</span><button className="secondary-button" onClick={(event) => { event.stopPropagation(); onRestore(task); }}><RotateCcw size={15} />恢复</button></article>
         )) : <div className="large-empty"><CheckCircle2 size={30} /><h2>还没有已完成任务</h2><p>完成的任务会安全地保存在这里。</p></div>}
+      </div>
+    </>
+  );
+}
+
+function PassiveView({ kind, tasks, onOpen, onRestore }: { kind: "reference" | "archived"; tasks: Task[]; onOpen: (id: string) => void; onRestore: (task: Task) => void }) {
+  const reference = kind === "reference";
+  const Icon = reference ? BookOpen : Archive;
+  return (
+    <>
+      <section className="simple-heading">
+        <div>
+          <span className="eyebrow">{reference ? "旧而有用" : "可逆收纳"}</span>
+          <h1>{reference ? "资料库" : "低价值归档"}</h1>
+          <p>{reference ? "保留已经没有待办、但仍值得搜索和复用的结论、代码与项目背景。" : "测试、重复、被替代和没有目标的记录会从工作区收起，但不会删除原对话。"}</p>
+        </div>
+        <div className="view-hint"><Icon size={17} />{tasks.length} 项</div>
+      </section>
+      <div className={`completed-list passive-list ${reference ? "reference-list" : "archive-list"}`}>
+        {tasks.length ? tasks.map((task) => (
+          <article key={task.id} onClick={() => onOpen(task.id)}>
+            <div className="completed-check"><Icon size={18} /></div>
+            <div><h3>{task.title}</h3><p><AccountBadge account={taskAccount(task)} /><SourceBadge source={task.sourceKind} />{task.summary}</p></div>
+            <span>{getRelativeTime(task.lastActivityAt)}</span>
+            <button className="secondary-button" onClick={(event) => { event.stopPropagation(); onRestore(task); }}><RotateCcw size={15} />重新激活</button>
+          </article>
+        )) : <div className="large-empty"><Icon size={30} /><h2>{reference ? "资料库还在整理" : "还没有低价值归档"}</h2><p>{reference ? "旧而有用的对话会自动沉淀在这里。" : "系统只会在置信度很高时自动收起低价值记录。"}</p></div>}
       </div>
     </>
   );
@@ -1756,11 +1899,11 @@ function SyncView({
           </div>
           <div className="device-summary"><span className="online-dot" />{onlineDevices.filter((device) => !isChatGPTWebDevice(device)).length} 台电脑最近在线 · {onlineDevices.filter(isChatGPTWebDevice).length} 个网页连接器在线 · {activeDevices.reduce((sum, device) => sum + device.recordCount, 0)} 条记录</div>
         </section>
-        <section className="settings-card account-overview"><div className="settings-icon violet"><UserRound size={21} /></div><div className="settings-copy"><span className="settings-label">账号来源</span><h2>两个 Pro 账号，统一排序</h2><p>每项任务同时保留账号、来源和设备。顶部可以任意组合筛选，继续任务时会打开正确的 Codex 或 ChatGPT 原对话。</p><div className="account-stats">{accounts.map((name) => { const accountTasks = tasks.filter((task) => taskAccount(task) === name); const sources = new Set(accountTasks.map((task) => task.sourceKind)).size; return <div key={name}><AccountBadge account={name} /><strong>{accountTasks.filter((task) => task.status !== "done").length}</strong><span>项未完成 · {sources} 类来源</span></div>; })}</div></div></section>
+        <section className="settings-card account-overview"><div className="settings-icon violet"><UserRound size={21} /></div><div className="settings-copy"><span className="settings-label">账号来源</span><h2>两个 Pro 账号，统一排序</h2><p>每项任务同时保留账号、来源和设备。顶部可以任意组合筛选，继续任务时会打开正确的 Codex 或 ChatGPT 原对话。</p><div className="account-stats">{accounts.map((name) => { const accountTasks = tasks.filter((task) => taskAccount(task) === name); const sources = new Set(accountTasks.map((task) => task.sourceKind)).size; return <div key={name}><AccountBadge account={name} /><strong>{accountTasks.filter(isAttentionTask).length}</strong><span>个工作窗口 · {sources} 类来源</span></div>; })}</div></div></section>
         <section className="settings-card"><div className="settings-icon amber"><Bell size={21} /></div><div className="settings-copy"><span className="settings-label">提醒节奏</span><h2>每日合并摘要</h2><p>上午 10:00 汇总待你处理、建议继续和等待解除的事项；22:00 到次日 08:00 保持安静。</p><div className="toggle-row"><div><strong>工作日收尾提醒</strong><span>17:30，只在有必要时出现</span></div><button className="toggle on" aria-label="关闭工作日收尾提醒"><span /></button></div></div></section>
         <section className="settings-card"><div className="settings-icon neutral"><Archive size={21} /></div><div className="settings-copy"><span className="settings-label">离线保险</span><h2>保留 JSON 备份</h2><p>直接云同步是主流程；JSON 只用于迁移或故障恢复，不再需要日常操作。</p><div className="button-row"><button className="secondary-button" onClick={onExport}><Download size={16} />导出备份</button><label className="secondary-button file-label"><Upload size={16} />恢复备份<input type="file" accept="application/json" onChange={onImport} /></label></div></div></section>
       </div>
-      <section className="workflow-panel"><div><Zap size={19} /><strong>统一信息驾驶舱链路</strong></div><ol><li><span>1</span><div><strong>所有来源持续汇入</strong><p>三台电脑扫描 Codex，两个网页账号增量同步 ChatGPT，手工事项随时收集。</p></div></li><li><span>2</span><div><strong>云端智能精判</strong><p>只分析新增或变化的对话；代码块、密钥、本地路径和工具输出先删除。</p></div></li><li><span>3</span><div><strong>只汇报需要决策的事</strong><p>首页保留最多 40 个工作窗口，其他历史信息静默归档在后台。</p></div></li></ol></section>
+      <section className="workflow-panel"><div><Zap size={19} /><strong>统一信息驾驶舱链路</strong></div><ol><li><span>1</span><div><strong>所有来源持续汇入</strong><p>三台电脑扫描 Codex，两个网页账号增量同步 ChatGPT，手工事项随时收集。</p></div></li><li><span>2</span><div><strong>云端分层整理</strong><p>仍有目标的进入工作区，旧而有用的进入资料库，明确低价值的可逆归档。</p></div></li><li><span>3</span><div><strong>只汇报需要决策的事</strong><p>首页最多保留 40 个工作窗口，优先呈现 3 个最值得你拍板的事项。</p></div></li></ol></section>
     </>
   );
 }
@@ -1771,7 +1914,7 @@ function TaskCard({ task, onOpen, onDone, onSnooze, onContinue, onDragStart, onD
       <div className="task-card-top"><PriorityBadge priority={task.priority} />{task.unread && <span className="unread-pill">有新结果</span>}<button className="icon-button" aria-label="更多操作"><MoreHorizontal size={16} /></button></div>
       <h3>{task.title}</h3><p className="task-reason">{task.reason}</p>
       <div className="mini-next"><span>下一步</span><p>{task.nextAction}</p></div>
-      <div className="task-card-bottom"><div><AccountBadge account={taskAccount(task)} /><SourceBadge source={task.sourceKind} /><span>{task.project}</span><span>{getRelativeTime(task.lastActivityAt)}</span></div><div className="quick-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => onContinue(task)} aria-label="继续对话"><ArrowRight size={15} /></button><button onClick={() => onSnooze(task)} aria-label="稍后提醒"><TimerReset size={15} /></button><button onClick={() => onDone(task)} aria-label="标记完成"><Check size={15} /></button></div></div>
+      <div className="task-card-bottom"><div><AccountBadge account={taskAccount(task)} /><SourceBadge source={task.sourceKind} /><span>{task.project}</span><span>{getRelativeTime(task.lastActivityAt)}</span></div><div className="quick-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => onContinue(task)} aria-label={continueButtonLabel(task)} title={continueButtonLabel(task)}><ArrowRight size={15} /></button><button onClick={() => onSnooze(task)} aria-label="稍后提醒"><TimerReset size={15} /></button><button onClick={() => onDone(task)} aria-label="标记完成"><Check size={15} /></button></div></div>
     </article>
   );
 }
@@ -1801,7 +1944,46 @@ function EmptyLine({ text }: { text: string }) { return <div className="empty-li
 
 function TaskDrawer({ task, onClose, onDone, onSnooze, onContinue, onUpdate }: { task: Task; onClose: () => void; onDone: (task: Task) => void; onSnooze: (task: Task) => void; onContinue: (task: Task) => void; onUpdate: (patch: Partial<Task>, message?: string) => void }) {
   const Icon = statusIcons[task.status];
-  return <><button className="drawer-backdrop" onClick={onClose} aria-label="关闭任务详情" /><aside className="task-drawer" aria-label="任务详情"><header><div className={`drawer-status status-${task.status}`}><Icon size={16} />{statusMeta[task.status].label}</div><button className="icon-button" onClick={onClose} aria-label="关闭任务详情"><X size={20} /></button></header><div className="drawer-body"><div className="drawer-badges"><PriorityBadge priority={task.priority} /><AccountBadge account={taskAccount(task)} /><SourceBadge source={task.sourceKind} /></div><h2>{task.title}</h2><p className="drawer-summary">{task.summary}</p><section className="next-panel"><span>建议下一步</span><strong>{task.nextAction}</strong><button className="primary-button" onClick={() => onContinue(task)}>继续原对话 <ArrowRight size={16} /></button></section><section className="drawer-section"><h3>为什么现在值得关注</h3><div className="reason-card"><Sparkles size={17} /><div><strong>{task.reason}</strong><p>推荐分 {taskScore(task)}，综合优先级、是否有未读结果和停滞时间计算。</p></div></div></section><section className="drawer-section"><h3>任务信息</h3><dl><div><dt>账号</dt><dd>{taskAccount(task)}</dd></div><div><dt>项目</dt><dd>{task.project}</dd></div><div><dt>设备</dt><dd>{task.device} · {task.hostOnline ? "在线" : "离线"}</dd></div><div><dt>最近推进</dt><dd>{getRelativeTime(task.lastActivityAt)}</dd></div><div><dt>来源</dt><dd>{sourceLabels[task.sourceKind]}</dd></div></dl></section><section className="drawer-section"><h3>改变状态</h3><div className="status-buttons">{statusOrder.filter((status) => status !== task.status).map((status) => { const StatusIcon = statusIcons[status]; return <button key={status} onClick={() => onUpdate({ status, completedAt: status === "done" ? new Date().toISOString() : null, reason: `手动移至${statusMeta[status].label}` }, `已移至${statusMeta[status].label}`)}><StatusIcon size={15} />{statusMeta[status].label}</button>; })}</div></section></div><footer>{task.status !== "done" && <button className="secondary-button" onClick={() => onSnooze(task)}><TimerReset size={16} />稍后</button>}{task.status !== "done" ? <button className="primary-button" onClick={() => onDone(task)}><Check size={16} />标记完成</button> : <button className="primary-button" onClick={() => onUpdate({ status: "suggested", completedAt: null, reason: "重新打开" }, "任务已恢复")}><RotateCcw size={16} />重新打开</button>}</footer></aside></>;
+  const passive = task.status === "reference" || task.status === "archived" || task.status === "done";
+  const protectedItem = task.tags.includes("永不归档");
+  const regularStatuses = statusOrder.filter((status) => status !== task.status && status !== "reference" && status !== "archived");
+  const restore = () => onUpdate({ status: "suggested", completedAt: null, reason: "由你重新激活", manualOverride: true }, "已恢复到建议继续");
+  const moveTo = (status: "reference" | "archived") => onUpdate({
+    status,
+    priority: "low",
+    unread: false,
+    completedAt: null,
+    reason: status === "reference" ? "由你保留为资料" : "由你移入低价值归档",
+    nextAction: status === "reference" ? "需要时从资料库重新激活" : "需要时从归档恢复",
+    manualOverride: true,
+  }, status === "reference" ? "已收入资料库" : "已归档，原对话没有删除");
+  const toggleProtection = () => onUpdate({
+    tags: protectedItem ? task.tags.filter((tag) => tag !== "永不归档") : [...task.tags, "永不归档"],
+    manualOverride: !protectedItem,
+  }, protectedItem ? "已恢复自动整理" : "已设为永不自动归档");
+
+  return <>
+    <button className="drawer-backdrop" onClick={onClose} aria-label="关闭任务详情" />
+    <aside className="task-drawer" aria-label="任务详情">
+      <header><div className={`drawer-status status-${task.status}`}><Icon size={16} />{statusMeta[task.status].label}</div><button className="icon-button" onClick={onClose} aria-label="关闭任务详情"><X size={20} /></button></header>
+      <div className="drawer-body">
+        <div className="drawer-badges"><PriorityBadge priority={task.priority} /><AccountBadge account={taskAccount(task)} /><SourceBadge source={task.sourceKind} />{protectedItem && <span className="protected-badge"><ShieldCheck size={12} />永不归档</span>}</div>
+        <h2>{task.title}</h2><p className="drawer-summary">{task.summary}</p>
+        <section className="next-panel"><span>{passive ? "保存方式" : "建议下一步"}</span><strong>{task.nextAction}</strong>{task.sourceThreadId && <button className="primary-button" onClick={() => onContinue(task)}>{continueButtonLabel(task)} <ArrowRight size={16} /></button>}</section>
+        <section className="drawer-section"><h3>{passive ? "为什么存放在这里" : "为什么现在值得关注"}</h3><div className="reason-card"><Sparkles size={17} /><div><strong>{task.reason}</strong><p>{passive ? "归档和资料库只改变工作台视图，不会删除 ChatGPT 或 Codex 原对话。" : `推荐分 ${taskScore(task)}，综合近期进展、待决策、截止日期和优先级计算。`}</p></div></div></section>
+        <section className="drawer-section"><h3>任务信息</h3><dl><div><dt>账号</dt><dd>{taskAccount(task)}</dd></div><div><dt>项目</dt><dd>{task.project}</dd></div><div><dt>设备</dt><dd>{task.device} · {task.hostOnline ? "在线" : "离线"}</dd></div><div><dt>最近推进</dt><dd>{getRelativeTime(task.lastActivityAt)}</dd></div><div><dt>来源</dt><dd>{sourceLabels[task.sourceKind]}</dd></div></dl></section>
+        {!passive && <section className="drawer-section"><h3>改变工作状态</h3><div className="status-buttons">{regularStatuses.map((status) => { const StatusIcon = statusIcons[status]; return <button key={status} onClick={() => onUpdate({ status, completedAt: status === "done" ? new Date().toISOString() : null, reason: `手动移至${statusMeta[status].label}`, manualOverride: true }, `已移至${statusMeta[status].label}`)}><StatusIcon size={15} />{statusMeta[status].label}</button>; })}</div></section>}
+      </div>
+      <footer>
+        {!passive && <button className="secondary-button" onClick={toggleProtection}><ShieldCheck size={16} />{protectedItem ? "恢复自动整理" : "永不归档"}</button>}
+        {isAttentionTask(task) && <button className="secondary-button" onClick={() => onSnooze(task)}><TimerReset size={16} />稍后</button>}
+        {isAttentionTask(task) && <button className="secondary-button" onClick={() => moveTo("reference")}><BookOpen size={16} />收为资料</button>}
+        {task.status === "reference" && <button className="secondary-button" onClick={() => moveTo("archived")}><Archive size={16} />移至归档</button>}
+        {task.status === "archived" && <button className="secondary-button" onClick={() => moveTo("reference")}><BookOpen size={16} />收为资料</button>}
+        {passive ? <button className="primary-button" onClick={restore}><RotateCcw size={16} />重新激活</button> : <button className="primary-button" onClick={() => onDone(task)}><Check size={16} />标记完成</button>}
+      </footer>
+    </aside>
+  </>;
 }
 
 function ChatGPTImportModal({ busy, progress, defaultAccount, onClose, onSubmit }: {
@@ -1858,7 +2040,7 @@ function AddDeviceModal({
         <form onSubmit={handleSubmit}>
           <label>设备名称<input autoFocus value={deviceName} onChange={(event) => setDeviceName(event.target.value)} placeholder="例如：办公室台式机" minLength={2} maxLength={48} required /></label>
           <label>这台电脑使用的账号<select value={accountAlias} onChange={(event) => setAccountAlias(event.target.value)}><option>账号1</option><option>账号2</option></select></label>
-          <div className="pairing-note"><Monitor size={18} /><div><strong>下载后，在对应电脑运行一次</strong><p>打开“下载”文件夹，在地址栏输入 <code>powershell</code> 并回车；然后执行：<code>powershell -ExecutionPolicy Bypass -File .\下载的脚本名.ps1</code></p><p>安装成功后会每 15 分钟自动同步。看到绿色“Threadline 已连接”后即可关闭窗口，并删除下载的安装脚本。</p></div></div>
+          <div className="pairing-note"><Monitor size={18} /><div><strong>下载后，在对应电脑运行一次</strong><p>打开“下载”文件夹，在地址栏输入 <code>powershell</code> 并回车；然后执行：<code>powershell -ExecutionPolicy Bypass -File &quot;.\下载的脚本名.ps1&quot;</code></p><p>安装成功后会每 15 分钟自动同步。看到绿色“Threadline 已连接”后即可关闭窗口，并删除下载的安装脚本。</p></div></div>
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}{busy ? "正在生成" : "下载连接脚本"}</button></div>
         </form>
       </div>

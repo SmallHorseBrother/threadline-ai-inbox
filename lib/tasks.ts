@@ -4,6 +4,8 @@ export type TaskStatus =
   | "running"
   | "waiting"
   | "suggested"
+  | "reference"
+  | "archived"
   | "done";
 
 export type TaskPriority = "high" | "medium" | "low";
@@ -44,8 +46,22 @@ export const statusMeta: Record<
   running: { label: "AI 处理中", description: "Codex 或 ChatGPT 任务仍在运行或等待已安排的执行" },
   waiting: { label: "等待中", description: "下一步取决于外部人员、日期、服务或设备" },
   suggested: { label: "建议继续", description: "当前可以继续，而且现在推进比较合适" },
+  reference: { label: "资料库", description: "已经没有待办，但仍包含可复用的结论、代码或背景" },
+  archived: { label: "低价值归档", description: "测试、重复、被替代或没有可执行目标的历史记录" },
   done: { label: "已完成", description: "目标已经交付或由你确认结束" },
 };
+
+export const attentionStatuses = new Set<TaskStatus>([
+  "inbox",
+  "mine",
+  "running",
+  "waiting",
+  "suggested",
+]);
+
+export function isAttentionTask(task: Pick<Task, "status">): boolean {
+  return attentionStatuses.has(task.status);
+}
 
 const hoursAgo = (hours: number) =>
   new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
@@ -209,12 +225,46 @@ export function getRelativeTime(iso: string): string {
 }
 
 export function taskScore(task: Task): number {
-  if (task.status === "done") return 0;
-  if (task.status === "running") return Math.max(task.score, 60);
+  if (!isAttentionTask(task)) return 0;
   const ageDays = (Date.now() - new Date(task.lastActivityAt).getTime()) / 86400000;
-  const staleBoost = Math.min(14, Math.floor(ageDays / 3) * 2);
-  const unreadBoost = task.unread ? 12 : 0;
+  const recencyAdjustment = ageDays <= 2 ? 4 : ageDays <= 7 ? 0 : ageDays <= 14 ? -4 : ageDays <= 30 ? -10 : -18;
+  const statusBoost = task.status === "mine" ? 12
+    : task.status === "running" ? 6
+      : task.status === "suggested" ? 4
+        : task.status === "inbox" ? 2
+          : -14;
+  const unreadBoost = task.unread ? 14 : 0;
   const priorityBoost = task.priority === "high" ? 10 : task.priority === "low" ? -8 : 0;
-  const waitingPenalty = task.status === "waiting" ? -18 : 0;
-  return Math.max(0, Math.min(100, task.score + staleBoost + unreadBoost + priorityBoost + waitingPenalty));
+  let dueBoost = 0;
+  if (task.dueAt) {
+    const dueDays = (new Date(task.dueAt).getTime() - Date.now()) / 86400000;
+    dueBoost = dueDays < 0 ? 18 : dueDays <= 1 ? 14 : dueDays <= 3 ? 8 : 0;
+  }
+  const protectedBoost = task.tags.includes("永不归档") ? 4 : 0;
+  return Math.max(0, Math.min(100, task.score + recencyAdjustment + statusBoost + unreadBoost + priorityBoost + dueBoost + protectedBoost));
+}
+
+function isOldNonUrgent(task: Task) {
+  const ageDays = (Date.now() - new Date(task.lastActivityAt).getTime()) / 86400000;
+  return ageDays > 14 && !task.unread && task.priority !== "high" && !task.dueAt;
+}
+
+export function selectPriorityTasks(tasks: Task[], limit = 3): Task[] {
+  const ranked = tasks
+    .filter(isAttentionTask)
+    .sort((a, b) => taskScore(b) - taskScore(a) || new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime());
+  const selected: Task[] = [];
+  const projectCounts = new Map<string, number>();
+  let oldNonUrgentCount = 0;
+  for (const task of ranked) {
+    if (selected.length >= limit) break;
+    const project = task.project.trim() || "未分类";
+    if ((projectCounts.get(project) ?? 0) >= 2) continue;
+    const oldNonUrgent = isOldNonUrgent(task);
+    if (oldNonUrgent && oldNonUrgentCount >= 1) continue;
+    selected.push(task);
+    projectCounts.set(project, (projectCounts.get(project) ?? 0) + 1);
+    if (oldNonUrgent) oldNonUrgentCount += 1;
+  }
+  return selected;
 }

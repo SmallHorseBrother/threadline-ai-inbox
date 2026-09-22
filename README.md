@@ -2,7 +2,7 @@
 
 > 把散落在 Codex、ChatGPT 和多台电脑里的 AI 对话，变成一个只需要审批和决策的工作收件箱。
 
-[English summary](#english-summary) · [本地体验](#五分钟本地体验) · [云端部署](#部署到-cloudflare) · [常见问题](#已经踩过的坑) · [隐私](docs/privacy.md)
+[English summary](#english-summary) · [本地体验](#五分钟本地体验) · [推荐机制](docs/recommendation-engine.md) · [云端部署](#部署到-cloudflare) · [常见问题](#已经踩过的坑) · [隐私](docs/privacy.md)
 
 ![Threadline overview](public/og.png)
 
@@ -28,6 +28,19 @@ Threadline 面向同时处理许多 AI 对话的人。它不会要求你重新�
 - OpenAI-compatible 模型接口，可选 BYOK 智能分类和领导摘要。
 - 没有模型密钥时自动退回本地规则判断。
 - Windows 优先的安装脚本和 JSON 备份入口。
+
+## v0.2.0：从历史仓库变成注意力系统
+
+这一版重点解决“历史越久，反而越容易被推荐”的问题。推荐链路改为：模型理解对话语义，确定性规则保障排序，生命周期整理器把无待办但有复用价值的内容放进资料库，把明确低价值内容可逆归档。
+
+- 旧任务不再因为停滞时间长而自动加分；超过 14 天、没有未读/截止日期/高优先级信号的事项会降权。
+- 未读、等待拍板、临近或已经逾期、人工高优先级和近期实质进展会优先出现。
+- 首页最多显示 3 项，同一项目最多 2 项，陈旧且不紧急的事项最多 1 项。
+- AI 判断上下文从“首轮 + 最近 3 轮”扩展为“前 2 轮 + 最近 6 轮”，降低只看结尾造成的误判。
+- 新增资料库与低价值归档；所有整理均可恢复，不删除 ChatGPT 或 Codex 原对话。
+- ChatGPT 与 Codex 的“继续原对话”使用原始会话地址和正确的 `codex://threads/` 深链。
+
+完整设计、评分因素与模型分工见 [推荐机制说明](docs/recommendation-engine.md)。
 
 ## 这次究竟开源了什么
 
@@ -130,7 +143,7 @@ npx wrangler secret put THREADLINE_ANALYSIS_API_KEY
 ## 路线图
 
 - 通用账号管理，不再限制两个固定别名。
-- 冷热分层：活跃、候选、资料库和可恢复归档。
+- 基于用户“保留 / 稍后 / 完成 / 归档”反馈的个性化重排。
 - Docker Compose 与 SQLite 单机版。
 - 更多 AI 客户端和协作工具连接器。
 - 更细的模型成本、数据保留和审计控制。
