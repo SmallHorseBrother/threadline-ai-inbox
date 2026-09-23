@@ -31,6 +31,8 @@ test("defines the complete Threadline task dashboard", async () => {
   assert.match(taskboard, /codex:\/\/threads\//);
   assert.ok(taskboard.includes("(?:c|share)"));
   assert.doesNotMatch(taskboard, /codex:\/\/thread\//);
+  assert.match(taskboard, /const intervention =/);
+  assert.doesNotMatch(taskboard, /\bstale\.length\b|\bstale\.map\b/);
   assert.match(layout, /og\.png/);
   assert.doesNotMatch(page + taskboard + layout, /codex-preview/);
   assert.doesNotMatch(page + taskboard + layout, /Your site is taking shape/);

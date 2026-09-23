@@ -1598,6 +1598,7 @@ function TodayView({ tasks, allTasks, deviceScope, devices, executiveSummary, li
   );
   const mine = workingSet.filter((task) => task.status === "mine");
   const running = workingSet.filter((task) => task.status === "running");
+  const intervention = workingSet.filter((task) => task.status === "suggested").slice(0, 4);
   const suggestions = selectPriorityTasks(decisions.length ? decisions : running, 3);
   const outdatedDevices = devices.filter(
     (device) => !device.revokedAt && !isChatGPTWebDevice(device) && !supportsSemanticSync(device.agentVersion),
@@ -1664,8 +1665,8 @@ function TodayView({ tasks, allTasks, deviceScope, devices, executiveSummary, li
           <div className="compact-list">{running.map((task) => <CompactTask key={task.id} task={task} onOpen={onOpen} running />)}</div>
         </div>
         <div className="panel wide-panel">
-          <PanelHeader icon={TimerReset} title="建议介入" count={stale.length} subtitle="已经停滞，或存在明确可执行的下一步" />
-          <div className="stale-grid">{stale.map((task) => <CompactTask key={task.id} task={task} onOpen={onOpen} />)}</div>
+          <PanelHeader icon={TimerReset} title="建议介入" count={intervention.length} subtitle="已经停滞，或存在明确可执行的下一步" />
+          <div className="stale-grid">{intervention.map((task) => <CompactTask key={task.id} task={task} onOpen={onOpen} />)}</div>
         </div>
       </section>
     </>

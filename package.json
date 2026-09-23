@@ -1,6 +1,6 @@
 {
   "name": "threadline-ai-inbox",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Turn scattered Codex and ChatGPT conversations into a decision-focused AI work inbox.",
   "license": "Apache-2.0",
