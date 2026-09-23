@@ -281,11 +281,12 @@ function buildChatGPTConnector(pairing: PairingConfig) {
   return String.raw`// ==UserScript==
 // @name         Threadline ChatGPT 云连接器 - ${account}
 // @namespace    https://threadline.local/
-// @version      1.2.2
+// @version      1.2.3
 // @description  实时同步 ChatGPT 对话，并支持一键全量回填历史
 // @match        https://chatgpt.com/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @connect      ${host}
 // @noframes
@@ -302,6 +303,7 @@ function buildChatGPTConnector(pairing: PairingConfig) {
   const ACCOUNT = ${JSON.stringify(account)};
   const LIVE_KEY = 'threadline.chatgpt.live.v2.' + ACCOUNT;
   const BACKFILL_KEY = 'threadline.chatgpt.backfill.v2.' + ACCOUNT;
+  const PANEL_HIDDEN_KEY = 'threadline.chatgpt.panel.hidden.v1.' + ACCOUNT;
   const PANEL_ID = 'threadline-history-backfill';
   const BATCH_SIZE = 10;
   const MAX_CONVERSATIONS = 5000;
@@ -725,15 +727,27 @@ function buildChatGPTConnector(pairing: PairingConfig) {
     });
   }
 
-  function ensurePanel() {
+  function hidePanel() {
+    localStorage.setItem(PANEL_HIDDEN_KEY, '1');
+    document.getElementById(PANEL_ID)?.remove();
+  }
+
+  function showPanel() {
+    localStorage.removeItem(PANEL_HIDDEN_KEY);
+    ensurePanel(true);
+  }
+
+  function ensurePanel(force = false) {
     let panel = document.getElementById(PANEL_ID);
     if (panel) return panel;
+    if (!force && localStorage.getItem(PANEL_HIDDEN_KEY) === '1') return null;
     panel = document.createElement('section');
     panel.id = PANEL_ID;
     panel.setAttribute('aria-live', 'polite');
     panel.style.cssText = 'position:fixed;right:18px;bottom:82px;z-index:2147483646;width:286px;padding:14px 14px 12px;border:1px solid rgba(255,255,255,.16);border-radius:14px;background:#201b38;color:#fff;box-shadow:0 14px 40px rgba(0,0,0,.28);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;';
-    panel.innerHTML = '<div style="font-weight:750;margin-bottom:5px">Threadline · ' + ACCOUNT + '</div><div data-threadline-status style="color:#d9d5eb;margin-bottom:10px">连接器已运行，可以回填全部历史。</div><button type="button" data-threadline-action style="width:100%;border:0;border-radius:9px;padding:9px 12px;background:#7357ff;color:#fff;font-weight:700;cursor:pointer">一键回填历史</button>';
+    panel.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px"><strong style="font-weight:750">Threadline · ' + ACCOUNT + '</strong><button type="button" data-threadline-close aria-label="关闭 Threadline 面板" title="关闭；同步仍会继续" style="border:0;background:transparent;color:#c9c3df;font-size:20px;line-height:1;cursor:pointer;padding:0 2px">×</button></div><div data-threadline-status style="color:#d9d5eb;margin-bottom:10px">连接器已运行，可以回填全部历史。</div><button type="button" data-threadline-action style="width:100%;border:0;border-radius:9px;padding:9px 12px;background:#7357ff;color:#fff;font-weight:700;cursor:pointer">一键回填历史</button>';
     panel.querySelector('[data-threadline-action]').addEventListener('click', toggleBackfill);
+    panel.querySelector('[data-threadline-close]').addEventListener('click', hidePanel);
     document.body.appendChild(panel);
     renderSavedState();
     return panel;
@@ -741,6 +755,7 @@ function buildChatGPTConnector(pairing: PairingConfig) {
 
   function setPanel(message, busy = false, label) {
     const panel = ensurePanel();
+    if (!panel) return;
     const status = panel.querySelector('[data-threadline-status]');
     const button = panel.querySelector('[data-threadline-action]');
     status.textContent = message;
@@ -751,7 +766,10 @@ function buildChatGPTConnector(pairing: PairingConfig) {
   function renderSavedState() {
     const state = readJson(BACKFILL_KEY, null);
     if (!state) return;
-    if (state.status === 'done') setPanel('已完成：' + Number(state.successCount || 0) + ' 个对话已回填。', false, '重新扫描历史');
+    if (state.status === 'done') {
+      setPanel('已完成：' + Number(state.successCount || 0) + ' 个对话已回填。', false, '重新扫描历史');
+      window.setTimeout(hidePanel, 4500);
+    }
     else if (state.status === 'paused') setPanel('已暂停：完成 ' + Number(state.successCount || 0) + ' / ' + Number(state.total || 0) + '。', false, '继续回填');
     else if (state.status === 'partial') setPanel('部分完成：还有 ' + Number(state.queue?.length || 0) + ' 个失败项。' + (state.lastFailure ? ' 原因：' + clean(state.lastFailure, 90) : ''), false, '重试失败项');
   }
@@ -855,6 +873,7 @@ function buildChatGPTConnector(pairing: PairingConfig) {
     writeJson(BACKFILL_KEY, state);
     backfillRunning = false;
     setPanel('已完成：' + state.successCount + ' 个对话已回填。', false, '重新扫描历史');
+    window.setTimeout(hidePanel, 4500);
   }
 
   async function captureVisibleConversation() {
@@ -885,6 +904,7 @@ function buildChatGPTConnector(pairing: PairingConfig) {
     clearTimeout(timer);
     timer = setTimeout(() => captureVisibleConversation().catch(error => console.warn('[Threadline] 增量同步失败', error)), 2500);
   };
+  if (typeof GM_registerMenuCommand === 'function') GM_registerMenuCommand('显示 Threadline 回填面板', showPanel);
   ensurePanel();
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   window.addEventListener('popstate', schedule);

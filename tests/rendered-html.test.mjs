@@ -109,6 +109,9 @@ test("ships persistence, privacy-safe sync, and deployment metadata", async () =
   assert.match(taskboard, /一键回填历史/);
   assert.match(taskboard, /backend-api\/conversations/);
   assert.match(taskboard, /history_backfill/);
+  assert.match(taskboard, /GM_registerMenuCommand/);
+  assert.match(taskboard, /data-threadline-close/);
+  assert.match(taskboard, /PANEL_HIDDEN_KEY/);
   assert.match(syncApi, /snapshotId/);
   assert.match(syncApi, /body\.complete !== false/);
   assert.match(taskboard, /lastHeartbeatAt/);
